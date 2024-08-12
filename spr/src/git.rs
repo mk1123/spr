@@ -23,6 +23,7 @@ pub struct PreparedCommit {
     pub oid: Oid,
     pub short_id: String,
     pub parent_oid: Oid,
+    pub pr_stack: Option<Vec<u64>>,
     pub message: MessageSectionsMap,
     pub pull_request_number: Option<u64>,
 }
@@ -36,7 +37,9 @@ pub struct Git {
 impl Git {
     pub fn new(repo: git2::Repository) -> Self {
         Self {
-            hooks: std::sync::Arc::new(std::sync::Mutex::new(git2_ext::hooks::Hooks::with_repo(&repo).unwrap())),
+            hooks: std::sync::Arc::new(std::sync::Mutex::new(
+                git2_ext::hooks::Hooks::with_repo(&repo).unwrap(),
+            )),
             repo: std::sync::Arc::new(std::sync::Mutex::new(repo)),
         }
     }
