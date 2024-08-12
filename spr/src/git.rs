@@ -339,6 +339,7 @@ impl Git {
             oid,
             short_id,
             parent_oid,
+            pr_stack: None,
             message,
             pull_request_number,
         })
