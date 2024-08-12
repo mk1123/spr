@@ -14,7 +14,6 @@ use crate::{
     message::{
         build_commit_message, parse_message, MessageSection, MessageSectionsMap,
     },
-    output::output,
     utils::{parse_pr_stack_list, run_command},
 };
 use git2::Oid;

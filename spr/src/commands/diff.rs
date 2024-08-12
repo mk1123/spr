@@ -618,6 +618,7 @@ async fn diff_impl(
                 build_pr_stack_message(&pr_stack, &config.owner, &config.repo),
             );
         }
+        pull_request_updates.update_message(&pull_request, message);
 
         if let Some(base_branch) = base_branch {
             // We are using a base branch.
@@ -675,14 +676,18 @@ async fn diff_impl(
             .reword("git push failed".to_string())?;
 
         // Then call GitHub to create the Pull Request.
+        let base_branch_name = base_branch
+            .as_ref()
+            .unwrap_or(&config.master_ref)
+            .branch_name()
+            .to_string();
+
+        output("🔍", &format!("Base branch: {}", base_branch_name))?;
+
         let pull_request_number = gh
             .create_pull_request(
                 message,
-                base_branch
-                    .as_ref()
-                    .unwrap_or(&config.master_ref)
-                    .branch_name()
-                    .to_string(),
+                base_branch_name,
                 pull_request_branch.branch_name().to_string(),
                 opts.draft,
             )
