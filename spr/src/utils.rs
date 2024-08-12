@@ -38,6 +38,28 @@ pub fn parse_name_list(text: &str) -> Vec<String> {
         .collect()
 }
 
+/*
+ * Given a PR stack string that looks like:
+ *
+ * ```
+ * https://github.com/mk1123/spr/pull/1 <-- (current PR)
+ * https://github.com/mk1123/spr/pull/2
+ * https://github.com/mk1123/spr/pull/3
+ * ```
+ *
+ * Returns a vector of PR numbers.
+ */
+pub fn parse_pr_stack_list(text: &str) -> Vec<u64> {
+    text.lines()
+        .filter_map(|line| {
+            line.split_whitespace()
+                .next()
+                .and_then(|url| url.split('/').last())
+                .and_then(|num| num.parse().ok())
+        })
+        .collect()
+}
+
 pub fn remove_all_parens(text: &str) -> String {
     lazy_regex::regex!(r#"[()]"#).replace_all(text, "").into()
 }
@@ -121,6 +143,46 @@ mod tests {
                 "foo (Mr Foo) bar (Ms Bar) (the other one), baz (Dr Baz)"
             ),
             expected
+        );
+    }
+
+    #[test]
+    fn test_parse_pr_stack_list_empty() {
+        assert!(parse_pr_stack_list("").is_empty());
+        assert!(parse_pr_stack_list("\n").is_empty());
+    }
+
+    #[test]
+    fn test_parse_pr_stack_list_single_pr() {
+        assert_eq!(
+            parse_pr_stack_list(
+                "https://github.com/mk1123/spr/pull/42 <-- (current PR)"
+            ),
+            vec![42]
+        );
+    }
+
+    #[test]
+    fn test_parse_pr_stack_list_multiple_prs() {
+        assert_eq!(
+            parse_pr_stack_list(
+                "https://github.com/mk1123/spr/pull/1 <-- (current PR)\n\
+                 https://github.com/mk1123/spr/pull/2\n\
+                 https://github.com/mk1123/spr/pull/3"
+            ),
+            vec![1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn test_parse_pr_stack_list_with_extra_text() {
+        assert_eq!(
+            parse_pr_stack_list(
+                "https://github.com/mk1123/spr/pull/1 <-- (current PR)\n\
+                 https://github.com/mk1123/spr/pull/2 (some extra text)\n\
+                 https://github.com/mk1123/spr/pull/3 [more text]"
+            ),
+            vec![1, 2, 3]
         );
     }
 }
