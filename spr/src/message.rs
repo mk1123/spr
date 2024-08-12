@@ -18,6 +18,7 @@ pub enum MessageSection {
     Title,
     Summary,
     TestPlan,
+    PRStack,
     Reviewers,
     ReviewedBy,
     PullRequest,
@@ -30,6 +31,7 @@ pub fn message_section_label(section: &MessageSection) -> &'static str {
         Title => "Title",
         Summary => "Summary",
         TestPlan => "Test Plan",
+        PRStack => "PR Stack",
         Reviewers => "Reviewers",
         ReviewedBy => "Reviewed By",
         PullRequest => "Pull Request",
@@ -43,6 +45,7 @@ pub fn message_section_by_label(label: &str) -> Option<MessageSection> {
         "title" => Some(Title),
         "summary" => Some(Summary),
         "test plan" => Some(TestPlan),
+        "pr stack" => Some(PRStack),
         "reviewer" => Some(Reviewers),
         "reviewers" => Some(Reviewers),
         "reviewed by" => Some(ReviewedBy),
@@ -162,6 +165,21 @@ pub fn build_message(
     result
 }
 
+pub(crate) fn build_pr_stack_message(
+    prs: Vec<u64>,
+    owner: &str,
+    repo: &str,
+) -> String {
+    let mut result = String::new();
+    for pr in prs {
+        result.push_str(&format!(
+            "--> https://github.com/{}/{}/pull/{}\n",
+            owner, repo, pr
+        ));
+    }
+    result
+}
+
 pub fn build_commit_message(section_texts: &MessageSectionsMap) -> String {
     build_message(
         section_texts,
@@ -169,6 +187,7 @@ pub fn build_commit_message(section_texts: &MessageSectionsMap) -> String {
             MessageSection::Title,
             MessageSection::Summary,
             MessageSection::TestPlan,
+            MessageSection::PRStack,
             MessageSection::Reviewers,
             MessageSection::ReviewedBy,
             MessageSection::PullRequest,
@@ -179,7 +198,11 @@ pub fn build_commit_message(section_texts: &MessageSectionsMap) -> String {
 pub fn build_github_body(section_texts: &MessageSectionsMap) -> String {
     build_message(
         section_texts,
-        &[MessageSection::Summary, MessageSection::TestPlan],
+        &[
+            MessageSection::Summary,
+            MessageSection::TestPlan,
+            MessageSection::PRStack,
+        ],
     )
 }
 
@@ -313,6 +336,42 @@ Reviewer:    a, b, c"#,
                 (MessageSection::Reviewers, "a, b, c".to_string()),
             ]
             .into()
+        );
+    }
+
+    #[test]
+    fn test_build_pr_stack_message_empty() {
+        assert_eq!(build_pr_stack_message(vec![], "owner", "repo"), "");
+    }
+
+    #[test]
+    fn test_build_pr_stack_message_single_pr() {
+        assert_eq!(
+            build_pr_stack_message(vec![42], "owner", "repo"),
+            "--> https://github.com/owner/repo/pull/42\n"
+        );
+    }
+
+    #[test]
+    fn test_build_pr_stack_message_multiple_prs() {
+        assert_eq!(
+            build_pr_stack_message(vec![1, 2, 3], "owner", "repo"),
+            "--> https://github.com/owner/repo/pull/1\n\
+             --> https://github.com/owner/repo/pull/2\n\
+             --> https://github.com/owner/repo/pull/3\n"
+        );
+    }
+
+    #[test]
+    fn test_build_pr_stack_message_different_owner_repo() {
+        assert_eq!(
+            build_pr_stack_message(
+                vec![10, 20],
+                "different-owner",
+                "different-repo"
+            ),
+            "--> https://github.com/different-owner/different-repo/pull/10\n\
+             --> https://github.com/different-owner/different-repo/pull/20\n"
         );
     }
 }
