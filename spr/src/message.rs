@@ -18,6 +18,7 @@ pub enum MessageSection {
     Title,
     Summary,
     TestPlan,
+    PRStack,
     Reviewers,
     ReviewedBy,
     PullRequest,
@@ -30,6 +31,7 @@ pub fn message_section_label(section: &MessageSection) -> &'static str {
         Title => "Title",
         Summary => "Summary",
         TestPlan => "Test Plan",
+        PRStack => "PR Stack",
         Reviewers => "Reviewers",
         ReviewedBy => "Reviewed By",
         PullRequest => "Pull Request",
@@ -43,6 +45,7 @@ pub fn message_section_by_label(label: &str) -> Option<MessageSection> {
         "title" => Some(Title),
         "summary" => Some(Summary),
         "test plan" => Some(TestPlan),
+        "pr stack" => Some(PRStack),
         "reviewer" => Some(Reviewers),
         "reviewers" => Some(Reviewers),
         "reviewed by" => Some(ReviewedBy),
@@ -98,6 +101,7 @@ pub fn parse_message(
         );
     }
 
+    output("🔍", &format!("Parsed message: {:?}", sections));
     sections
 }
 
@@ -169,6 +173,7 @@ pub fn build_commit_message(section_texts: &MessageSectionsMap) -> String {
             MessageSection::Title,
             MessageSection::Summary,
             MessageSection::TestPlan,
+            MessageSection::PRStack,
             MessageSection::Reviewers,
             MessageSection::ReviewedBy,
             MessageSection::PullRequest,
