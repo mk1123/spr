@@ -101,7 +101,6 @@ pub fn parse_message(
         );
     }
 
-    output("🔍", &format!("Parsed message: {:?}", sections));
     sections
 }
 
@@ -163,6 +162,21 @@ pub fn build_message(
         }
     }
 
+    result
+}
+
+pub(crate) fn build_pr_stack_message(
+    prs: Vec<u64>,
+    owner: &str,
+    repo: &str,
+) -> String {
+    let mut result = String::new();
+    for pr in prs {
+        result.push_str(&format!(
+            "--> https://github.com/{}/{}/pull/{}\n",
+            owner, repo, pr
+        ));
+    }
     result
 }
 
@@ -318,6 +332,42 @@ Reviewer:    a, b, c"#,
                 (MessageSection::Reviewers, "a, b, c".to_string()),
             ]
             .into()
+        );
+    }
+
+    #[test]
+    fn test_build_pr_stack_message_empty() {
+        assert_eq!(build_pr_stack_message(vec![], "owner", "repo"), "");
+    }
+
+    #[test]
+    fn test_build_pr_stack_message_single_pr() {
+        assert_eq!(
+            build_pr_stack_message(vec![42], "owner", "repo"),
+            "--> https://github.com/owner/repo/pull/42\n"
+        );
+    }
+
+    #[test]
+    fn test_build_pr_stack_message_multiple_prs() {
+        assert_eq!(
+            build_pr_stack_message(vec![1, 2, 3], "owner", "repo"),
+            "--> https://github.com/owner/repo/pull/1\n\
+             --> https://github.com/owner/repo/pull/2\n\
+             --> https://github.com/owner/repo/pull/3\n"
+        );
+    }
+
+    #[test]
+    fn test_build_pr_stack_message_different_owner_repo() {
+        assert_eq!(
+            build_pr_stack_message(
+                vec![10, 20],
+                "different-owner",
+                "different-repo"
+            ),
+            "--> https://github.com/different-owner/different-repo/pull/10\n\
+             --> https://github.com/different-owner/different-repo/pull/20\n"
         );
     }
 }

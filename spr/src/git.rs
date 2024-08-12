@@ -14,7 +14,7 @@ use crate::{
     message::{
         build_commit_message, parse_message, MessageSection, MessageSectionsMap,
     },
-    utils::run_command,
+    utils::{parse_pr_stack_list, run_command},
 };
 use git2::Oid;
 
@@ -343,6 +343,20 @@ impl Git {
             message,
             pull_request_number,
         })
+    }
+
+    pub fn parse_pr_stack_from_commit(&self, oid: Oid) -> Result<Vec<u64>> {
+        let repo = self.repo();
+        let commit = repo.find_commit(oid)?;
+        let message =
+            String::from_utf8_lossy(&commit.message_bytes()).into_owned();
+        let message = parse_message(&message, MessageSection::Title);
+        let pr_stack = message.get(&MessageSection::PRStack);
+        drop(commit);
+        drop(repo);
+        Ok(parse_pr_stack_list(
+            pr_stack.map(String::as_str).unwrap_or(""),
+        ))
     }
 
     pub fn get_all_ref_names(&self) -> Result<HashSet<String>> {
