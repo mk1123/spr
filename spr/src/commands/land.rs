@@ -230,7 +230,7 @@ pub async fn land(
 
         gh.update_pull_request(
             pull_request_number,
-            PullRequestUpdate {
+            &PullRequestUpdate {
                 base: Some(config.master_ref.branch_name().to_string()),
                 ..Default::default()
             },
@@ -338,7 +338,7 @@ pub async fn land(
                 let result = gh
                     .update_pull_request(
                         pull_request_number,
-                        PullRequestUpdate {
+                        &PullRequestUpdate {
                             base: Some(
                                 pull_request.base.on_github().to_string(),
                             ),
