@@ -14,7 +14,8 @@ use crate::{
     message::{
         build_commit_message, parse_message, MessageSection, MessageSectionsMap,
     },
-    utils::run_command,
+    output::output,
+    utils::{parse_pr_stack_list, run_command},
 };
 use git2::Oid;
 
@@ -23,6 +24,7 @@ pub struct PreparedCommit {
     pub oid: Oid,
     pub short_id: String,
     pub parent_oid: Oid,
+    pub pr_stack: Option<Vec<u64>>,
     pub message: MessageSectionsMap,
     pub pull_request_number: Option<u64>,
 }
@@ -36,7 +38,9 @@ pub struct Git {
 impl Git {
     pub fn new(repo: git2::Repository) -> Self {
         Self {
-            hooks: std::sync::Arc::new(std::sync::Mutex::new(git2_ext::hooks::Hooks::with_repo(&repo).unwrap())),
+            hooks: std::sync::Arc::new(std::sync::Mutex::new(
+                git2_ext::hooks::Hooks::with_repo(&repo).unwrap(),
+            )),
             repo: std::sync::Arc::new(std::sync::Mutex::new(repo)),
         }
     }
@@ -89,6 +93,7 @@ impl Git {
             let commit = repo.find_commit(prepared_commit.oid)?;
             if limit != Some(0) {
                 message = build_commit_message(&prepared_commit.message);
+                output("message", &message);
                 if Some(&message[..]) != commit.message() {
                     updating = true;
                 }
@@ -336,9 +341,24 @@ impl Git {
             oid,
             short_id,
             parent_oid,
+            pr_stack: None,
             message,
             pull_request_number,
         })
+    }
+
+    pub fn parse_pr_stack_from_commit(&self, oid: Oid) -> Result<Vec<u64>> {
+        let repo = self.repo();
+        let commit = repo.find_commit(oid)?;
+        let message =
+            String::from_utf8_lossy(&commit.message_bytes()).into_owned();
+        let message = parse_message(&message, MessageSection::Title);
+        let pr_stack = message.get(&MessageSection::PRStack);
+        drop(commit);
+        drop(repo);
+        Ok(parse_pr_stack_list(
+            pr_stack.map(String::as_str).unwrap_or(""),
+        ))
     }
 
     pub fn get_all_ref_names(&self) -> Result<HashSet<String>> {
