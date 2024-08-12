@@ -100,7 +100,7 @@ async fn close_impl(
     let result = gh
         .update_pull_request(
             pull_request_number,
-            PullRequestUpdate {
+            &PullRequestUpdate {
                 state: Some(PullRequestState::Closed),
                 ..Default::default()
             },
