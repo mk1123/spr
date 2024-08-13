@@ -14,15 +14,17 @@ use crate::{
     message::{
         build_commit_message, parse_message, MessageSection, MessageSectionsMap,
     },
-    utils::run_command,
+    output::output,
+    utils::{parse_pr_stack_list, run_command},
 };
 use git2::Oid;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PreparedCommit {
     pub oid: Oid,
     pub short_id: String,
     pub parent_oid: Oid,
+    pub pr_stack: Option<Vec<u64>>,
     pub message: MessageSectionsMap,
     pub pull_request_number: Option<u64>,
 }
@@ -36,7 +38,9 @@ pub struct Git {
 impl Git {
     pub fn new(repo: git2::Repository) -> Self {
         Self {
-            hooks: std::sync::Arc::new(std::sync::Mutex::new(git2_ext::hooks::Hooks::with_repo(&repo).unwrap())),
+            hooks: std::sync::Arc::new(std::sync::Mutex::new(
+                git2_ext::hooks::Hooks::with_repo(&repo).unwrap(),
+            )),
             repo: std::sync::Arc::new(std::sync::Mutex::new(repo)),
         }
     }
@@ -130,6 +134,45 @@ impl Git {
         }
 
         Ok(())
+    }
+
+    pub fn rewrite_single_commit_message(
+        &self,
+        prepared_commit: &mut PreparedCommit,
+        parent_oid: Option<Oid>,
+    ) -> Result<Oid> {
+        let repo = self.repo();
+        let hooks = self.hooks();
+
+        let commit = repo.find_commit(prepared_commit.oid)?;
+        let message = build_commit_message(&prepared_commit.message);
+        output("current message to be set as commit message", &message);
+
+        if Some(&message[..]) == commit.message() {
+            return Ok(prepared_commit.oid);
+        }
+
+        let new_oid = repo.commit(
+            None,
+            &commit.author(),
+            &commit.committer(),
+            &message[..],
+            &commit.tree()?,
+            &[&repo.find_commit(
+                parent_oid.unwrap_or(prepared_commit.parent_oid),
+            )?],
+        )?;
+
+        hooks.run_post_rewrite_rebase(&repo, &[(prepared_commit.oid, new_oid)]);
+
+        prepared_commit.oid = new_oid;
+
+        repo.find_reference("HEAD")?;
+        repo.find_reference("HEAD")?
+            .resolve()?
+            .set_target(new_oid, "spr updated commit message")?;
+
+        Ok(new_oid)
     }
 
     pub fn rebase_commits(
@@ -336,9 +379,25 @@ impl Git {
             oid,
             short_id,
             parent_oid,
+            pr_stack: None,
             message,
             pull_request_number,
         })
+    }
+
+    pub fn parse_pr_stack_from_commit(&self, oid: Oid) -> Result<Vec<u64>> {
+        let repo = self.repo();
+        let commit = repo.find_commit(oid)?;
+        let message =
+            String::from_utf8_lossy(&commit.message_bytes()).into_owned();
+        output("parent message", &message);
+        let message = parse_message(&message, MessageSection::Title);
+        let pr_stack = message.get(&MessageSection::PRStack);
+        drop(commit);
+        drop(repo);
+        Ok(parse_pr_stack_list(
+            pr_stack.map(String::as_str).unwrap_or(""),
+        ))
     }
 
     pub fn get_all_ref_names(&self) -> Result<HashSet<String>> {
