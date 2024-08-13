@@ -8,7 +8,6 @@
 use crate::{
     error::{Error, Result},
     message,
-    output::output,
 };
 
 use git2::Oid;
@@ -94,8 +93,6 @@ pub fn get_pr_stack(
     directly_based_on_master: bool,
 ) -> Result<String> {
     if cherry_pick || directly_based_on_master {
-        output("", "in cherry pick mode");
-        output_pr_stack(&vec![pull_request_number]);
         Ok(message::build_pr_stack_message(
             &vec![pull_request_number],
             &config.owner,
@@ -103,28 +100,13 @@ pub fn get_pr_stack(
         ))
     } else {
         let mut pr_stack = git.parse_pr_stack_from_commit(parent_oid)?;
-        output("", "in normal mode");
-        output_pr_stack(&pr_stack);
         pr_stack.insert(0, pull_request_number);
-        output_pr_stack(&pr_stack);
         Ok(message::build_pr_stack_message(
             &pr_stack,
             &config.owner,
             &config.repo,
         ))
     }
-}
-
-pub fn output_pr_stack(pr_stack: &[u64]) {
-    output(
-        "pr stack",
-        pr_stack
-            .iter()
-            .map(|n| format!("#{}", n))
-            .collect::<Vec<String>>()
-            .join("\n")
-            .as_str(),
-    );
 }
 
 #[cfg(test)]

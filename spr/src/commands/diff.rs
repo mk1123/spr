@@ -8,14 +8,14 @@
 use std::iter::zip;
 
 use crate::{
-    error::{add_error, Error, Result, ResultExt},
+    error::{Error, Result, ResultExt},
     git::PreparedCommit,
     github::{
         GitHub, PullRequest, PullRequestRequestReviewers, PullRequestState,
         PullRequestUpdate,
     },
     message::{
-        self, build_pr_stack_message, validate_commit_message, MessageSection,
+         validate_commit_message, MessageSection,
     },
     output::{output, write_commit_title},
     utils::{get_pr_stack, parse_name_list, remove_all_parens, run_command},
