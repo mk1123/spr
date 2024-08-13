@@ -18,7 +18,7 @@ use crate::{
 };
 use git2::Oid;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PreparedCommit {
     pub oid: Oid,
     pub short_id: String,

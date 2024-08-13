@@ -18,7 +18,7 @@ use crate::{
         self, build_pr_stack_message, validate_commit_message, MessageSection,
     },
     output::{output, write_commit_title},
-    utils::{parse_name_list, remove_all_parens, run_command},
+    utils::{get_pr_stack, parse_name_list, remove_all_parens, run_command},
 };
 use git2::Oid;
 use indoc::{formatdoc, indoc};
@@ -355,37 +355,17 @@ async fn diff_impl(
                 // However, the user requested to update the commit message on
                 // GitHub
 
-                if opts.cherry_pick || directly_based_on_master {
-                    message.insert(
-                        MessageSection::PRStack,
-                        message::build_pr_stack_message(
-                            &vec![pull_request.number],
-                            &config.owner,
-                            &config.repo,
-                        ),
-                    );
-                } else {
-                    let parent_commit = local_commit.parent_oid;
-                    let mut pr_stack =
-                        git.parse_pr_stack_from_commit(parent_commit)?;
-                    pr_stack.insert(0, pull_request.number);
-                    output(
-                        "PR stack: {}",
-                        &build_pr_stack_message(
-                            &pr_stack,
-                            &config.owner,
-                            &config.repo,
-                        ),
-                    )?;
-                    message.insert(
-                        MessageSection::PRStack,
-                        build_pr_stack_message(
-                            &pr_stack,
-                            &config.owner,
-                            &config.repo,
-                        ),
-                    );
-                }
+                message.insert(
+                    MessageSection::PRStack,
+                    get_pr_stack(
+                        git,
+                        config,
+                        pull_request.number,
+                        local_commit.parent_oid,
+                        opts.cherry_pick,
+                        directly_based_on_master,
+                    )?,
+                );
 
                 let mut pull_request_updates: PullRequestUpdate =
                     Default::default();
@@ -600,24 +580,17 @@ async fn diff_impl(
         // Things we want to update in the Pull Request on GitHub
         let mut pull_request_updates: PullRequestUpdate = Default::default();
 
-        if opts.cherry_pick || directly_based_on_master {
-            message.insert(
-                MessageSection::PRStack,
-                message::build_pr_stack_message(
-                    &vec![pull_request.number],
-                    &config.owner,
-                    &config.repo,
-                ),
-            );
-        } else {
-            let parent_commit = local_commit.parent_oid;
-            let mut pr_stack = git.parse_pr_stack_from_commit(parent_commit)?;
-            pr_stack.insert(0, pull_request.number);
-            message.insert(
-                MessageSection::PRStack,
-                build_pr_stack_message(&pr_stack, &config.owner, &config.repo),
-            );
-        }
+        message.insert(
+            MessageSection::PRStack,
+            get_pr_stack(
+                git,
+                config,
+                pull_request.number,
+                local_commit.parent_oid,
+                opts.cherry_pick,
+                directly_based_on_master,
+            )?,
+        );
         pull_request_updates.update_message(&pull_request, message);
 
         if let Some(base_branch) = base_branch {
@@ -693,26 +666,17 @@ async fn diff_impl(
             )
             .await?;
 
-        if opts.cherry_pick || directly_based_on_master {
-            output("hi", "in the cherry-pick mode");
-            message.insert(
-                MessageSection::PRStack,
-                message::build_pr_stack_message(
-                    &vec![pull_request_number],
-                    &config.owner,
-                    &config.repo,
-                ),
-            );
-        } else {
-            output("hi", "in the non-cherry-pick mode");
-            let parent_commit = local_commit.parent_oid;
-            let mut pr_stack = git.parse_pr_stack_from_commit(parent_commit)?;
-            pr_stack.insert(0, pull_request_number);
-            message.insert(
-                MessageSection::PRStack,
-                build_pr_stack_message(&pr_stack, &config.owner, &config.repo),
-            );
-        }
+        message.insert(
+            MessageSection::PRStack,
+            get_pr_stack(
+                git,
+                config,
+                pull_request_number,
+                local_commit.parent_oid,
+                opts.cherry_pick,
+                directly_based_on_master,
+            )?,
+        );
 
         let mut pull_request_updates: PullRequestUpdate = Default::default();
         let newly_created_pr =

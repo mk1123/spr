@@ -5,8 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    message,
+    output::output,
+};
 
+use git2::Oid;
 use std::{io::Write, process::Stdio};
 use unicode_normalization::UnicodeNormalization;
 
@@ -78,6 +83,44 @@ pub async fn run_command(cmd: &mut tokio::process::Command) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn get_pr_stack(
+    git: &crate::git::Git,
+    config: &crate::config::Config,
+    pull_request_number: u64,
+    parent_oid: Oid,
+    cherry_pick: bool,
+    directly_based_on_master: bool,
+) -> Result<String> {
+    if cherry_pick || directly_based_on_master {
+        Ok(message::build_pr_stack_message(
+            &vec![pull_request_number],
+            &config.owner,
+            &config.repo,
+        ))
+    } else {
+        let mut pr_stack = git.parse_pr_stack_from_commit(parent_oid)?;
+        output_pr_stack(&pr_stack);
+        pr_stack.insert(0, pull_request_number);
+        Ok(message::build_pr_stack_message(
+            &pr_stack,
+            &config.owner,
+            &config.repo,
+        ))
+    }
+}
+
+pub fn output_pr_stack(pr_stack: &[u64]) {
+    output(
+        "{}",
+        pr_stack
+            .iter()
+            .map(|n| format!("#{}", n))
+            .collect::<Vec<String>>()
+            .join("\n")
+            .as_str(),
+    );
 }
 
 #[cfg(test)]
