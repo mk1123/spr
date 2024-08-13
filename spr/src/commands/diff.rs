@@ -14,9 +14,11 @@ use crate::{
         GitHub, PullRequest, PullRequestRequestReviewers, PullRequestState,
         PullRequestUpdate,
     },
-    message::{validate_commit_message, MessageSection},
+    message::{
+        self, build_pr_stack_message, validate_commit_message, MessageSection,
+    },
     output::{output, write_commit_title},
-    utils::{parse_name_list, remove_all_parens, run_command},
+    utils::{get_pr_stack, parse_name_list, remove_all_parens, run_command},
 };
 use git2::Oid;
 use indoc::{formatdoc, indoc};
@@ -63,7 +65,7 @@ pub async fn diff(
 
     // The parent of the first commit in the list is the commit on master that
     // the local branch is based on
-    let master_base_oid = if let Some(first_commit) = prepared_commits.get(0) {
+    let master_base_oid = if let Some(first_commit) = prepared_commits.first() {
         first_commit.parent_oid
     } else {
         output("👋", "Branch is empty - nothing to do. Good bye!")?;
@@ -117,14 +119,16 @@ pub async fn diff(
             pull_request,
         )
         .await;
+        // This updates the commit message in the local Git repository (if it was
+        // changed by the implementation)
+        add_error(
+            &mut result,
+            git.rewrite_commit_messages(
+                std::slice::from_mut(prepared_commit),
+                None,
+            ),
+        );
     }
-
-    // This updates the commit message in the local Git repository (if it was
-    // changed by the implementation)
-    add_error(
-        &mut result,
-        git.rewrite_commit_messages(prepared_commits.as_mut_slice(), None),
-    );
 
     result
 }
@@ -351,6 +355,18 @@ async fn diff_impl(
                 // However, the user requested to update the commit message on
                 // GitHub
 
+                message.insert(
+                    MessageSection::PRStack,
+                    get_pr_stack(
+                        git,
+                        config,
+                        pull_request.number,
+                        local_commit.parent_oid,
+                        opts.cherry_pick,
+                        directly_based_on_master,
+                    )?,
+                );
+
                 let mut pull_request_updates: PullRequestUpdate =
                     Default::default();
                 pull_request_updates.update_message(pull_request, message);
@@ -359,7 +375,7 @@ async fn diff_impl(
                     // ...and there are actual changes to the message
                     gh.update_pull_request(
                         pull_request.number,
-                        pull_request_updates,
+                        &pull_request_updates,
                     )
                     .await?;
                     output("✍", "Updated commit message on GitHub")?;
@@ -512,7 +528,7 @@ async fn diff_impl(
     if let Some(oid) = pr_base_parent {
         // ...unless if that's the same commit as the one we added to
         // pr_commit_parents first.
-        if pr_commit_parents.get(0) != Some(&oid) {
+        if pr_commit_parents.first() != Some(&oid) {
             pr_commit_parents.push(oid);
         }
     }
@@ -564,9 +580,18 @@ async fn diff_impl(
         // Things we want to update in the Pull Request on GitHub
         let mut pull_request_updates: PullRequestUpdate = Default::default();
 
-        if opts.update_message {
-            pull_request_updates.update_message(&pull_request, message);
-        }
+        message.insert(
+            MessageSection::PRStack,
+            get_pr_stack(
+                git,
+                config,
+                pull_request.number,
+                local_commit.parent_oid,
+                opts.cherry_pick,
+                directly_based_on_master,
+            )?,
+        );
+        pull_request_updates.update_message(&pull_request, message);
 
         if let Some(base_branch) = base_branch {
             // We are using a base branch.
@@ -602,7 +627,7 @@ async fn diff_impl(
         }
 
         if !pull_request_updates.is_empty() {
-            gh.update_pull_request(pull_request.number, pull_request_updates)
+            gh.update_pull_request(pull_request.number, &pull_request_updates)
                 .await?;
         }
     } else {
@@ -624,17 +649,40 @@ async fn diff_impl(
             .reword("git push failed".to_string())?;
 
         // Then call GitHub to create the Pull Request.
+        let base_branch_name = base_branch
+            .as_ref()
+            .unwrap_or(&config.master_ref)
+            .branch_name()
+            .to_string();
+
+        output("🔍", &format!("Base branch: {}", base_branch_name))?;
+
         let pull_request_number = gh
             .create_pull_request(
                 message,
-                base_branch
-                    .as_ref()
-                    .unwrap_or(&config.master_ref)
-                    .branch_name()
-                    .to_string(),
+                base_branch_name,
                 pull_request_branch.branch_name().to_string(),
                 opts.draft,
             )
+            .await?;
+
+        message.insert(
+            MessageSection::PRStack,
+            get_pr_stack(
+                git,
+                config,
+                pull_request_number,
+                local_commit.parent_oid,
+                opts.cherry_pick,
+                directly_based_on_master,
+            )?,
+        );
+
+        let mut pull_request_updates: PullRequestUpdate = Default::default();
+        let newly_created_pr =
+            gh.clone().get_pull_request(pull_request_number).await?;
+        pull_request_updates.update_message(&newly_created_pr, message);
+        gh.update_pull_request(pull_request_number, &pull_request_updates)
             .await?;
 
         let pull_request_url = config.pull_request_url(pull_request_number);
