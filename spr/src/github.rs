@@ -350,7 +350,7 @@ impl GitHub {
     pub async fn update_pull_request(
         &self,
         number: u64,
-        updates: PullRequestUpdate,
+        updates: &PullRequestUpdate,
     ) -> Result<()> {
         octocrab::instance()
             .patch::<octocrab::models::pulls::PullRequest, _, _>(
