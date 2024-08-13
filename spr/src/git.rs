@@ -146,7 +146,6 @@ impl Git {
 
         let commit = repo.find_commit(prepared_commit.oid)?;
         let message = build_commit_message(&prepared_commit.message);
-        output("current message to be set as commit message", &message);
 
         if Some(&message[..]) == commit.message() {
             return Ok(prepared_commit.oid);
@@ -390,7 +389,6 @@ impl Git {
         let commit = repo.find_commit(oid)?;
         let message =
             String::from_utf8_lossy(&commit.message_bytes()).into_owned();
-        output("parent message", &message);
         let message = parse_message(&message, MessageSection::Title);
         let pr_stack = message.get(&MessageSection::PRStack);
         drop(commit);

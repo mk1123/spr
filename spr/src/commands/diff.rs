@@ -656,8 +656,6 @@ async fn diff_impl(
             .branch_name()
             .to_string();
 
-        output("🔍", &format!("Base branch: {}", base_branch_name))?;
-
         let pull_request_number = gh
             .create_pull_request(
                 message,
