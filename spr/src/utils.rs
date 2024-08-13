@@ -46,9 +46,9 @@ pub fn parse_name_list(text: &str) -> Vec<String> {
  * Given a PR stack string that looks like:
  *
  * ```
- * https://github.com/mk1123/spr/pull/1 <-- (current PR)
- * https://github.com/mk1123/spr/pull/2
- * https://github.com/mk1123/spr/pull/3
+ * * https://github.com/mk1123/spr/pull/1 <-- (current PR)
+ * * https://github.com/mk1123/spr/pull/2
+ * * https://github.com/mk1123/spr/pull/3
  * ```
  *
  * Returns a vector of PR numbers.
@@ -56,7 +56,9 @@ pub fn parse_name_list(text: &str) -> Vec<String> {
 pub fn parse_pr_stack_list(text: &str) -> Vec<u64> {
     text.lines()
         .filter_map(|line| {
-            line.split_whitespace()
+            line.trim_start_matches('*')
+                .trim_start()
+                .split_whitespace()
                 .next()
                 .and_then(|url| url.split('/').last())
                 .and_then(|num| num.parse().ok())

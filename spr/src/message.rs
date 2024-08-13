@@ -175,11 +175,11 @@ pub(crate) fn build_pr_stack_message(
         .map(|(index, &pr)| {
             if index == 0 {
                 format!(
-                    "https://github.com/{}/{}/pull/{} <-- (current PR)\n",
+                    "* https://github.com/{}/{}/pull/{} <-- (current PR)\n",
                     owner, repo, pr
                 )
             } else {
-                format!("https://github.com/{}/{}/pull/{}\n", owner, repo, pr)
+                format!("* https://github.com/{}/{}/pull/{}\n", owner, repo, pr)
             }
         })
         .collect()
