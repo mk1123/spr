@@ -5,8 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    message,
+    output::output,
+};
 
+use git2::Oid;
 use std::{io::Write, process::Stdio};
 use unicode_normalization::UnicodeNormalization;
 
@@ -38,6 +43,28 @@ pub fn parse_name_list(text: &str) -> Vec<String> {
         .collect()
 }
 
+/*
+ * Given a PR stack string that looks like:
+ *
+ * ```
+ * https://github.com/mk1123/spr/pull/1 <-- (current PR)
+ * https://github.com/mk1123/spr/pull/2
+ * https://github.com/mk1123/spr/pull/3
+ * ```
+ *
+ * Returns a vector of PR numbers.
+ */
+pub fn parse_pr_stack_list(text: &str) -> Vec<u64> {
+    text.lines()
+        .filter_map(|line| {
+            line.split_whitespace()
+                .next()
+                .and_then(|url| url.split('/').last())
+                .and_then(|num| num.parse().ok())
+        })
+        .collect()
+}
+
 pub fn remove_all_parens(text: &str) -> String {
     lazy_regex::regex!(r#"[()]"#).replace_all(text, "").into()
 }
@@ -56,6 +83,48 @@ pub async fn run_command(cmd: &mut tokio::process::Command) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn get_pr_stack(
+    git: &crate::git::Git,
+    config: &crate::config::Config,
+    pull_request_number: u64,
+    parent_oid: Oid,
+    cherry_pick: bool,
+    directly_based_on_master: bool,
+) -> Result<String> {
+    if cherry_pick || directly_based_on_master {
+        output("", "in cherry pick mode");
+        output_pr_stack(&vec![pull_request_number]);
+        Ok(message::build_pr_stack_message(
+            &vec![pull_request_number],
+            &config.owner,
+            &config.repo,
+        ))
+    } else {
+        let mut pr_stack = git.parse_pr_stack_from_commit(parent_oid)?;
+        output("", "in normal mode");
+        output_pr_stack(&pr_stack);
+        pr_stack.insert(0, pull_request_number);
+        output_pr_stack(&pr_stack);
+        Ok(message::build_pr_stack_message(
+            &pr_stack,
+            &config.owner,
+            &config.repo,
+        ))
+    }
+}
+
+pub fn output_pr_stack(pr_stack: &[u64]) {
+    output(
+        "pr stack",
+        pr_stack
+            .iter()
+            .map(|n| format!("#{}", n))
+            .collect::<Vec<String>>()
+            .join("\n")
+            .as_str(),
+    );
 }
 
 #[cfg(test)]
@@ -121,6 +190,46 @@ mod tests {
                 "foo (Mr Foo) bar (Ms Bar) (the other one), baz (Dr Baz)"
             ),
             expected
+        );
+    }
+
+    #[test]
+    fn test_parse_pr_stack_list_empty() {
+        assert!(parse_pr_stack_list("").is_empty());
+        assert!(parse_pr_stack_list("\n").is_empty());
+    }
+
+    #[test]
+    fn test_parse_pr_stack_list_single_pr() {
+        assert_eq!(
+            parse_pr_stack_list(
+                "https://github.com/mk1123/spr/pull/42 <-- (current PR)"
+            ),
+            vec![42]
+        );
+    }
+
+    #[test]
+    fn test_parse_pr_stack_list_multiple_prs() {
+        assert_eq!(
+            parse_pr_stack_list(
+                "https://github.com/mk1123/spr/pull/1 <-- (current PR)\n\
+                 https://github.com/mk1123/spr/pull/2\n\
+                 https://github.com/mk1123/spr/pull/3"
+            ),
+            vec![1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn test_parse_pr_stack_list_with_extra_text() {
+        assert_eq!(
+            parse_pr_stack_list(
+                "https://github.com/mk1123/spr/pull/1 <-- (current PR)\n\
+                 https://github.com/mk1123/spr/pull/2 (some extra text)\n\
+                 https://github.com/mk1123/spr/pull/3 [more text]"
+            ),
+            vec![1, 2, 3]
         );
     }
 }
