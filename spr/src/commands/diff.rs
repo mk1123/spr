@@ -14,9 +14,7 @@ use crate::{
         GitHub, PullRequest, PullRequestRequestReviewers, PullRequestState,
         PullRequestUpdate,
     },
-    message::{
-         validate_commit_message, MessageSection,
-    },
+    message::{validate_commit_message, MessageSection},
     output::{output, write_commit_title},
     utils::{get_pr_stack, parse_name_list, remove_all_parens, run_command},
 };
@@ -406,6 +404,11 @@ async fn diff_impl(
     // that's also rebasing).
     // If it's `None`, then we will not merge anything into the new Pull Request
     // commit.
+
+    // TODO(manan): Update this comment. Essentially I've modified the logic so
+    // that if a PR is ever directly on master or is a cherry pick then we use
+    // master as the base branch.
+
     // If we are updating an existing PR, then there are three cases here:
     // (1) the parent tree of this commit is unchanged and we do not need to
     //     merge in master, which means that the local commit was amended, but
@@ -439,14 +442,13 @@ async fn diff_impl(
     // commit is not directly based on master, we have to create this new PR
     // with a base branch, so that is case 3.
 
-    let (pr_base_parent, base_branch) = if pr_base_tree == new_base_tree
+    let (pr_base_parent, base_branch) = if !directly_based_on_master
+        && pr_base_tree == new_base_tree
         && !needs_merging_master
     {
         // Case 1
         (None, base_branch)
-    } else if base_branch.is_none()
-        && (directly_based_on_master || opts.cherry_pick)
-    {
+    } else if directly_based_on_master || opts.cherry_pick {
         // Case 2
         (Some(master_base_oid), None)
     } else {
@@ -625,6 +627,11 @@ async fn diff_impl(
             run_command(&mut cmd)
                 .await
                 .reword("git push failed".to_string())?;
+
+            // Make sure the base is set to master, since the PR is against the
+            // master branch.
+            pull_request_updates.base =
+                Some(config.master_ref.branch_name().to_string());
         }
 
         if !pull_request_updates.is_empty() {
