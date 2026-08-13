@@ -22,15 +22,11 @@ You can disable this in the [configuration](../reference/configuration.md).
 
 ## Updating the commit message
 
-When you create a PR with `spr diff`, **the PR becomes the source of truth** for the title and description. When you land a commit with `spr land`, its commit message will be amended to match the PR's title and description, regardless of what is in your local repo.
+The local commit remains the source of truth after `spr diff` creates the PR. The local subject is the PR title. The local body is the PR description. Amend the local commit, then run `spr diff`. The command synchronizes metadata even when the code tree did not change.
 
-If you want to update the title or description, there are two ways to do so:
+Do not edit an SPR PR title or description directly in GitHub. If the user deliberately changed that metadata in GitHub and wants to keep it, run `spr amend` to import it into the local commit before the next diff.
 
-- Modify the PR through GitHub's UI.
-
-- Amend the commit message locally, then run `spr diff --update-message`. _Note that this does not update reviewers_; that must be done in the GitHub UI. If you amend the commit message but don't include the `--update-message` flag, you'll get an error.
-
-If you want to go the other way --- that is, make your local commit message match the PR's title and description --- you can run `spr amend`.
+`--update-message` remains accepted for compatibility, but it is not required. `--update-commit-message` and its `-m` short form only override the message of the synthetic update commit on the PR branch. They do not set the PR description.
 
 ## Further information
 
@@ -46,7 +42,7 @@ At various stages of a commit's lifecycle, `spr` will add lines to the commit me
 
   The presence or absence of this line is how `spr diff` knows whether a commit already has a PR created for it, and thus whether it should create a new PR or update an existing one.
 
-- `spr land` will amend the commit message to exactly match the title/description of the PR (just as `spr amend` does), as well as adding a line like this:
+- `spr land` verifies that the local commit and PR are synchronized. It also adds a line like this:
   ```
   Reviewed By: github-username-a
   ```
@@ -86,7 +82,7 @@ Pull Request: https://github.com/example/my-thing/pull/123
 
 In this state, running `spr diff` again will update PR 123.
 
-Running `spr land` will amend the commit message to have the exact title/description of PR 123, add the list of users who approved the PR, then land the commit. In this case, suppose only `coworker-b` approved:
+Running `spr land` will verify the synchronized title and description, add the list of users who approved the PR, then land the commit. In this case, suppose only `coworker-b` approved:
 
 ```
 Add feature

@@ -120,9 +120,26 @@ pub async fn spr() -> Result<()> {
         )
     };
 
+    let default_remote_name = std::env::args()
+        .next()
+        .and_then(|arg0| {
+            std::path::Path::new(&arg0)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+        })
+        .map(|name| {
+            if name == "nspr" {
+                "no-mistakes"
+            } else {
+                "origin"
+            }
+        })
+        .unwrap_or("origin")
+        .to_string();
     let github_remote_name = git_config
         .get_string("spr.githubRemoteName")
-        .unwrap_or_else(|_| "origin".to_string());
+        .unwrap_or(default_remote_name);
     let github_master_branch = git_config
         .get_string("spr.githubMasterBranch")
         .unwrap_or_else(|_| "master".to_string());

@@ -11,7 +11,9 @@ use std::{io::Write, process::Stdio, time::Duration};
 use crate::{
     error::{Error, Result, ResultExt},
     github::{PullRequestState, PullRequestUpdate, ReviewStatus},
-    message::build_github_body_for_merging,
+    message::{
+        build_github_body, build_github_body_for_merging, MessageSection,
+    },
     output::{output, write_commit_title},
     utils::run_command,
 };
@@ -71,6 +73,22 @@ pub async fn land(
     if pull_request.state != PullRequestState::Open {
         return Err(Error::new(formatdoc!(
             "This Pull Request is already closed!",
+        )));
+    }
+
+    let local_title = prepared_commit
+        .message
+        .get(&MessageSection::Title)
+        .ok_or_else(|| Error::new("Local commit has no title".to_string()))?;
+    let local_body = build_github_body(&prepared_commit.message);
+    if &pull_request.title != local_title
+        || pull_request.body.as_deref() != Some(local_body.as_str())
+    {
+        return Err(Error::new(formatdoc!(
+            "The Pull Request title or description differs from the local \
+             commit. Run `spr diff` to restore the local commit as the source \
+             of truth. Run `spr amend` only if you intend to import the \
+             GitHub-side edits."
         )));
     }
 

@@ -44,11 +44,11 @@ impl Git {
         }
     }
 
-    pub fn repo(&self) -> std::sync::MutexGuard<git2::Repository> {
+    pub fn repo(&self) -> std::sync::MutexGuard<'_, git2::Repository> {
         self.repo.lock().expect("poisoned mutex")
     }
 
-    fn hooks(&self) -> std::sync::MutexGuard<git2_ext::hooks::Hooks> {
+    fn hooks(&self) -> std::sync::MutexGuard<'_, git2_ext::hooks::Hooks> {
         self.hooks.lock().expect("poisoned mutex")
     }
 
@@ -272,6 +272,16 @@ impl Git {
         let result = self
             .repo()
             .find_reference(reference)?
+            .peel_to_commit()?
+            .id();
+
+        Ok(result)
+    }
+
+    pub fn resolve_commit(&self, reference: &str) -> Result<Oid> {
+        let result = self
+            .repo()
+            .revparse_single(reference)?
             .peel_to_commit()?
             .id();
 

@@ -67,11 +67,11 @@ There are a few possible variations to note:
   ```
   pick 0a0a0a Commit A
   squash 2c2c2c throwaway
-  exec spr diff --update-message
+  exec spr diff
   pick 1b1b1b Commit B
   ```
 
-  The `squash` command will open an editor, where you can edit the message of the combined commit. The `--update-message` flag on the next line is important; see [this guide](./commit-message.md) for more detail.
+  The `squash` command will open an editor, where you can edit the message of the combined commit. The next `spr diff` synchronizes that message to the PR.
 
 ## Cherry-picking
 

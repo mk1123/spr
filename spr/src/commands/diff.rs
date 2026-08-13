@@ -14,12 +14,15 @@ use crate::{
         GitHub, PullRequest, PullRequestRequestReviewers, PullRequestState,
         PullRequestUpdate,
     },
-    message::{validate_commit_message, MessageSection},
+    message::{build_github_body, validate_commit_message, MessageSection},
     output::{output, write_commit_title},
-    utils::{get_pr_stack, parse_name_list, remove_all_parens, run_command},
+    utils::{
+        get_pr_stack, parse_name_list, parse_pr_stack_list, remove_all_parens,
+        run_command,
+    },
 };
 use git2::Oid;
-use indoc::{formatdoc, indoc};
+use indoc::formatdoc;
 
 #[derive(Debug, clap::Parser)]
 pub struct DiffOptions {
@@ -27,24 +30,37 @@ pub struct DiffOptions {
     #[clap(long, short = 'a')]
     all: bool,
 
-    /// Update the pull request title and description on GitHub from the local
-    /// commit message
-    #[clap(long)]
+    /// Create/update a pull request for one commit in the current branch stack
+    #[clap(long, conflicts_with = "all")]
+    commit: Option<String>,
+
+    /// Deprecated compatibility flag. Pull request metadata always syncs from
+    /// the local commit.
+    #[clap(long, hide = true)]
     update_message: bool,
 
     /// Submit any new Pull Request as a draft
     #[clap(long)]
     draft: bool,
 
-    /// Message to be used for commits updating existing pull requests (e.g.
-    /// 'rebase' or 'review comments')
-    #[clap(long, short = 'm')]
+    /// Message for the synthetic update commit on the pull request branch.
+    /// Defaults to "Update <local commit subject>".
+    #[clap(
+        long = "update-commit-message",
+        visible_alias = "message",
+        short = 'm'
+    )]
     message: Option<String>,
 
     /// Submit this commit as if it was cherry-picked on master. Do not base it
     /// on any intermediate changes between the master branch and this commit.
     #[clap(long)]
     cherry_pick: bool,
+
+    /// Link to the pi session that produced this commit. Recorded in the local
+    /// commit message and the Pull Request description.
+    #[clap(long, value_name = "URL")]
+    pi_session: Option<String>,
 }
 
 pub async fn diff(
@@ -70,6 +86,50 @@ pub async fn diff(
         return result;
     };
 
+    if let Some(commit) = &opts.commit {
+        let commit_oid = git.resolve_commit(commit)?;
+        let commit_index = prepared_commits
+            .iter()
+            .position(|prepared_commit| prepared_commit.oid == commit_oid)
+            .ok_or_else(|| {
+                Error::new(format!(
+                    "Commit {commit} is not in the current branch stack"
+                ))
+            })?;
+
+        let mut prepared_commit = prepared_commits[commit_index].clone();
+        let pull_request_task = prepared_commit
+            .pull_request_number
+            .map(|number| tokio::spawn(gh.clone().get_pull_request(number)));
+
+        let pull_request = if let Some(task) = pull_request_task {
+            Some(task.await??)
+        } else {
+            None
+        };
+
+        write_commit_title(&prepared_commit)?;
+
+        result = diff_impl(
+            &opts,
+            git,
+            gh,
+            config,
+            &mut prepared_commit,
+            master_base_oid,
+            pull_request,
+        )
+        .await;
+
+        prepared_commits[commit_index] = prepared_commit;
+        git.rewrite_commit_messages(
+            &mut prepared_commits[commit_index..],
+            Some(1),
+        )?;
+
+        return result;
+    }
+
     if !opts.all {
         // Remove all prepared commits from the vector but the last. So, if
         // `--all` is not given, we only operate on the HEAD commit.
@@ -84,8 +144,6 @@ pub async fn diff(
                 .map(|number| tokio::spawn(gh.clone().get_pull_request(number)))
         })
         .collect();
-
-    let mut message_on_prompt = "".to_string();
 
     let mut parent_oid = None;
     for (prepared_commit, pull_request_task) in
@@ -113,7 +171,6 @@ pub async fn diff(
         // the implementation encounters an error or exits early.
         result = diff_impl(
             &opts,
-            &mut message_on_prompt,
             git,
             gh,
             config,
@@ -132,10 +189,48 @@ pub async fn diff(
     result
 }
 
+async fn verify_pr_sync(
+    gh: &crate::github::GitHub,
+    local_commit_short_id: &str,
+    pull_request_number: u64,
+    message: &crate::message::MessageSectionsMap,
+) -> Result<()> {
+    let pull_request = gh.clone().get_pull_request(pull_request_number).await?;
+    let expected_title = message
+        .get(&MessageSection::Title)
+        .ok_or_else(|| Error::new("Local commit has no title".to_string()))?;
+    let expected_body = build_github_body(message);
+
+    if &pull_request.title != expected_title
+        || pull_request.body.as_deref() != Some(expected_body.as_str())
+    {
+        return Err(Error::new(format!(
+            "Pull Request #{pull_request_number} metadata does not match local commit {}",
+            local_commit_short_id
+        )));
+    }
+
+    let base_pull_request = message
+        .get(&MessageSection::PRStack)
+        .and_then(|stack| parse_pr_stack_list(stack).get(1).copied())
+        .map_or_else(|| "main".to_string(), |number| format!("#{number}"));
+    output(
+        "🔗",
+        &format!(
+            "Local commit: {}\nPull Request: #{}\nRemote head: {}\nBase PR: {}\nMetadata: synchronized",
+            local_commit_short_id,
+            pull_request_number,
+            &pull_request.head_oid.to_string()[..7],
+            base_pull_request,
+        ),
+    )?;
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn diff_impl(
     opts: &DiffOptions,
-    message_on_prompt: &mut String,
     git: &crate::git::Git,
     gh: &mut crate::github::GitHub,
     config: &crate::config::Config,
@@ -143,8 +238,13 @@ async fn diff_impl(
     master_base_oid: Oid,
     pull_request: Option<PullRequest>,
 ) -> Result<()> {
+    let local_commit_short_id = local_commit.short_id.clone();
     // Parsed commit message of the local commit
     let message = &mut local_commit.message;
+
+    if let Some(pi_session_url) = &opts.pi_session {
+        message.insert(MessageSection::PiSession, pi_session_url.clone());
+    }
 
     // Check if the local commit is based directly on the master branch.
     let directly_based_on_master = local_commit.parent_oid == master_base_oid;
@@ -196,9 +296,10 @@ async fn diff_impl(
         )?;
     }
 
-    if local_commit.pull_request_number.is_none() || opts.update_message {
-        validate_commit_message(message, config)?;
-    }
+    // Keep accepting --update-message for command compatibility. Metadata
+    // synchronization is now unconditional.
+    let _ = opts.update_message;
+    validate_commit_message(message, config)?;
 
     if let Some(ref pull_request) = pull_request {
         if pull_request.state == PullRequestState::Closed {
@@ -206,26 +307,6 @@ async fn diff_impl(
                 "Pull request is closed. If you want to open a new one, \
                  remove the 'Pull Request' section from the commit message."
             )));
-        }
-
-        if !opts.update_message {
-            let mut pull_request_updates: PullRequestUpdate =
-                Default::default();
-            pull_request_updates.update_message(pull_request, message);
-
-            if !pull_request_updates.is_empty() {
-                output(
-                    "⚠️",
-                    indoc!(
-                        "The Pull Request's title/message differ from the \
-                         local commit's message.
-                         Use `spr diff --update-message` to overwrite the \
-                         title and message on GitHub with the local message, \
-                         or `spr amend` to go the other way (rewrite the local \
-                         commit message with what is on GitHub)."
-                    ),
-                )?;
-            }
         }
     }
 
@@ -348,39 +429,43 @@ async fn diff_impl(
         {
             // ...and it does not need a rebase, and the trees of both Pull
             // Request branch and base are all the right ones.
-            output("✅", "No update necessary")?;
+            output("✅", "PR code already synchronized")?;
 
-            if opts.update_message {
-                // However, the user requested to update the commit message on
-                // GitHub
+            message.insert(
+                MessageSection::PRStack,
+                get_pr_stack(
+                    git,
+                    config,
+                    pull_request.number,
+                    local_commit.parent_oid,
+                    opts.cherry_pick,
+                    directly_based_on_master,
+                )?,
+            );
 
-                message.insert(
-                    MessageSection::PRStack,
-                    get_pr_stack(
-                        git,
-                        config,
-                        pull_request.number,
-                        local_commit.parent_oid,
-                        opts.cherry_pick,
-                        directly_based_on_master,
-                    )?,
-                );
+            let mut pull_request_updates: PullRequestUpdate =
+                Default::default();
+            pull_request_updates.update_message(pull_request, message);
 
-                let mut pull_request_updates: PullRequestUpdate =
-                    Default::default();
-                pull_request_updates.update_message(pull_request, message);
-
-                if !pull_request_updates.is_empty() {
-                    // ...and there are actual changes to the message
-                    gh.update_pull_request(
-                        pull_request.number,
-                        &pull_request_updates,
-                    )
-                    .await?;
-                    output("✍", "Updated commit message on GitHub")?;
-                }
+            if !pull_request_updates.is_empty() {
+                gh.update_pull_request(
+                    pull_request.number,
+                    &pull_request_updates,
+                )
+                .await?;
+                output(
+                    "✍",
+                    "Updated PR title and description from local commit",
+                )?;
             }
 
+            verify_pr_sync(
+                gh,
+                &local_commit_short_id,
+                pull_request.number,
+                message,
+            )
+            .await?;
             return Ok(());
         }
     }
@@ -498,28 +583,11 @@ async fn diff_impl(
         (Some(new_base_branch_commit), Some(base_branch))
     };
 
-    let mut github_commit_message = opts.message.clone();
-    if pull_request.is_some() && github_commit_message.is_none() {
-        let input = {
-            let message_on_prompt = message_on_prompt.clone();
-
-            tokio::task::spawn_blocking(move || {
-                dialoguer::Input::<String>::new()
-                    .with_prompt("Message (leave empty to abort)")
-                    .with_initial_text(message_on_prompt)
-                    .allow_empty(true)
-                    .interact_text()
-            })
-            .await??
-        };
-
-        if input.is_empty() {
-            return Err(Error::new("Aborted as per user request".to_string()));
-        }
-
-        *message_on_prompt = input.clone();
-        github_commit_message = Some(input);
-    }
+    let github_commit_message = synthetic_update_message(
+        opts.message.as_deref(),
+        title,
+        pull_request.is_some(),
+    );
 
     // Construct the new commit for the Pull Request branch. First parent is the
     // current head commit of the Pull Request (we set this to the master base
@@ -615,12 +683,11 @@ async fn diff_impl(
                 .await
                 .reword("git push failed".to_string())?;
 
-            // If the Pull Request's base is not set to the base branch yet,
-            // change that now.
-            if pull_request.base.branch_name() != base_branch.branch_name() {
-                pull_request_updates.base =
-                    Some(base_branch.branch_name().to_string());
-            }
+            update_pull_request_base(
+                &mut pull_request_updates,
+                pull_request.base.branch_name(),
+                base_branch.branch_name(),
+            );
         } else {
             // The Pull Request is against the master branch. In that case we
             // only need to push the update to the Pull Request branch.
@@ -628,16 +695,25 @@ async fn diff_impl(
                 .await
                 .reword("git push failed".to_string())?;
 
-            // Make sure the base is set to master, since the PR is against the
-            // master branch.
-            pull_request_updates.base =
-                Some(config.master_ref.branch_name().to_string());
+            update_pull_request_base(
+                &mut pull_request_updates,
+                pull_request.base.branch_name(),
+                config.master_ref.branch_name(),
+            );
         }
 
         if !pull_request_updates.is_empty() {
             gh.update_pull_request(pull_request.number, &pull_request_updates)
                 .await?;
+            output("✍", "Updated PR title and description from local commit")?;
         }
+        verify_pr_sync(
+            gh,
+            &local_commit_short_id,
+            pull_request.number,
+            message,
+        )
+        .await?;
     } else {
         // We are creating a new Pull Request.
 
@@ -715,7 +791,98 @@ async fn diff_impl(
                 }
             }
         }
+        verify_pr_sync(
+            gh,
+            &local_commit_short_id,
+            pull_request_number,
+            message,
+        )
+        .await?;
     }
 
     Ok(())
+}
+
+fn update_pull_request_base(
+    updates: &mut PullRequestUpdate,
+    current_base: &str,
+    desired_base: &str,
+) {
+    if current_base != desired_base {
+        updates.base = Some(desired_base.to_string());
+    }
+}
+
+fn synthetic_update_message(
+    explicit_message: Option<&str>,
+    local_title: &str,
+    is_existing_pull_request: bool,
+) -> Option<String> {
+    explicit_message.map(str::to_string).or_else(|| {
+        is_existing_pull_request.then(|| format!("Update {local_title}"))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::github::PullRequestUpdate;
+
+    use super::{synthetic_update_message, update_pull_request_base};
+
+    #[test]
+    fn omits_unchanged_main_base() {
+        let mut updates = PullRequestUpdate::default();
+
+        update_pull_request_base(&mut updates, "main", "main");
+
+        assert!(updates.base.is_none());
+    }
+
+    #[test]
+    fn omits_unchanged_synthetic_base() {
+        let mut updates = PullRequestUpdate::default();
+
+        update_pull_request_base(&mut updates, "spr/base", "spr/base");
+
+        assert!(updates.base.is_none());
+    }
+
+    #[test]
+    fn retargets_synthetic_base_to_main() {
+        let mut updates = PullRequestUpdate::default();
+
+        update_pull_request_base(&mut updates, "spr/base", "main");
+
+        assert_eq!(updates.base.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn retargets_one_synthetic_base_to_another() {
+        let mut updates = PullRequestUpdate::default();
+
+        update_pull_request_base(&mut updates, "spr/old", "spr/new");
+
+        assert_eq!(updates.base.as_deref(), Some("spr/new"));
+    }
+
+    #[test]
+    fn defaults_existing_pr_update_message_to_local_title() {
+        assert_eq!(
+            synthetic_update_message(None, "Keep commits authoritative", true),
+            Some("Update Keep commits authoritative".to_string())
+        );
+    }
+
+    #[test]
+    fn preserves_explicit_update_commit_message() {
+        assert_eq!(
+            synthetic_update_message(Some("Resolve review"), "Title", true),
+            Some("Resolve review".to_string())
+        );
+    }
+
+    #[test]
+    fn keeps_initial_pr_commit_message_default() {
+        assert_eq!(synthetic_update_message(None, "Title", false), None);
+    }
 }

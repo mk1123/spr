@@ -12,9 +12,9 @@ This section details the process of putting a single commit up for review, and l
 
    1. Make whatever changes you need in your working copy.
    2. Amend them into your HEAD commit with `git commit --amend`.
-   3. Run `spr diff`. If you changed the commit message in the previous step, you will need to add the flag `--update-message`; see [this guide](./commit-message.md) for more detail.
+   3. Run `spr diff`. This updates the PR code, title, and description from your HEAD commit.
 
-      This will update the PR with the new version of your HEAD commit. spr will prompt you for a short message that describes what you changed. You can also pass the update message on the command line using the `--message`/`-m` flag of `spr diff`.
+      spr names the synthetic PR-branch update commit `Update <local commit subject>`. You can override that review-history message with `--update-commit-message` or `-m`. It does not control the PR description.
 
 5. Once your PR is approved, run `spr land` to push it upstream.
 
@@ -22,9 +22,9 @@ The above instructions have you committing directly to your local `main`. Doing 
 
 ## When you update
 
-When you run `spr diff` to update an existing PR, your update will be added to the PR as a new commit, so that reviewers can see exactly what changed. The new commit's message will be what you entered in step 4.3 of the instructions above.
+When you run `spr diff` to update an existing PR, your update will be added to the PR as a new commit, so that reviewers can see exactly what changed. By default, this synthetic commit uses the local subject in `Update <local commit subject>`.
 
-The individual commits that you see in the PR are solely for the benefit of reviewers; they will not be reflected in the commit history when the PR is landed. The commit that eventually lands on upstream `main` will always be a single commit, whose message is the title and description from the PR.
+The individual commits that you see in the PR are solely for the benefit of reviewers; they will not be reflected in the commit history when the PR is landed. The commit that eventually lands on upstream `main` will always be the single synchronized local commit.
 
 ## Updating before landing
 

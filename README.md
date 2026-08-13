@@ -48,7 +48,7 @@ To use spr, run `spr init` inside a local checkout of a GitHub-backed git reposi
 
 To submit a commit for pull request, run `spr diff`.
 
-If you want to make changes to the pull request, amend your local commit (and/or rebase it) and call `spr diff` again. When updating an existing pull request, spr will ask you for a short message to describe the update.
+If you want to make changes to the pull request, amend your local commit (and/or rebase it) and call `spr diff` again. The local commit remains the source of truth for the PR title, description, diff, and stack position. For an existing PR, spr creates a synthetic update commit named `Update <local commit subject>` unless you override it with `--update-commit-message`. After synchronization, spr verifies the PR title and description and reports the local commit, PR number, remote head, and base PR.
 
 To squash-merge an open pull request, run `spr land`.
 

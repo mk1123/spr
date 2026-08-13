@@ -19,6 +19,7 @@ pub enum MessageSection {
     Summary,
     TestPlan,
     PRStack,
+    PiSession,
     Reviewers,
     ReviewedBy,
     PullRequest,
@@ -32,6 +33,7 @@ pub fn message_section_label(section: &MessageSection) -> &'static str {
         Summary => "Summary",
         TestPlan => "Test Plan",
         PRStack => "PR Stack",
+        PiSession => "Pi Session",
         Reviewers => "Reviewers",
         ReviewedBy => "Reviewed By",
         PullRequest => "Pull Request",
@@ -46,6 +48,7 @@ pub fn message_section_by_label(label: &str) -> Option<MessageSection> {
         "summary" => Some(Summary),
         "test plan" => Some(TestPlan),
         "pr stack" => Some(PRStack),
+        "pi session" => Some(PiSession),
         "reviewer" => Some(Reviewers),
         "reviewers" => Some(Reviewers),
         "reviewed by" => Some(ReviewedBy),
@@ -193,6 +196,7 @@ pub fn build_commit_message(section_texts: &MessageSectionsMap) -> String {
             MessageSection::Summary,
             MessageSection::TestPlan,
             MessageSection::PRStack,
+            MessageSection::PiSession,
             MessageSection::Reviewers,
             MessageSection::ReviewedBy,
             MessageSection::PullRequest,
@@ -207,6 +211,7 @@ pub fn build_github_body(section_texts: &MessageSectionsMap) -> String {
             MessageSection::Summary,
             MessageSection::TestPlan,
             MessageSection::PRStack,
+            MessageSection::PiSession,
         ],
     )
 }
@@ -345,6 +350,34 @@ Reviewer:    a, b, c"#,
     }
 
     #[test]
+    fn test_pi_session_round_trips() {
+        let parsed = parse_message(
+            "Title\n\nSummary text\n\n\
+             Pi Session: https://pi.dev/session/#abc123",
+            MessageSection::Title,
+        );
+        assert_eq!(
+            parsed.get(&MessageSection::PiSession),
+            Some(&"https://pi.dev/session/#abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn test_pi_session_in_github_body() {
+        let sections = [
+            (MessageSection::Title, "T".to_string()),
+            (MessageSection::Summary, "S".to_string()),
+            (
+                MessageSection::PiSession,
+                "https://pi.dev/session/#abc123".to_string(),
+            ),
+        ]
+        .into();
+        let body = build_github_body(&sections);
+        assert!(body.ends_with("Pi Session: https://pi.dev/session/#abc123\n"));
+    }
+
+    #[test]
     fn test_build_pr_stack_message_empty() {
         assert_eq!(build_pr_stack_message(&vec![], "owner", "repo"), "");
     }
@@ -353,7 +386,7 @@ Reviewer:    a, b, c"#,
     fn test_build_pr_stack_message_single_pr() {
         assert_eq!(
             build_pr_stack_message(&vec![42], "owner", "repo"),
-            "https://github.com/owner/repo/pull/42 <-- (current PR)\n"
+            "* https://github.com/owner/repo/pull/42 <-- (current PR)\n"
         );
     }
 
@@ -361,9 +394,9 @@ Reviewer:    a, b, c"#,
     fn test_build_pr_stack_message_multiple_prs() {
         assert_eq!(
             build_pr_stack_message(&vec![1, 2, 3], "owner", "repo"),
-            "https://github.com/owner/repo/pull/1 <-- (current PR)\n\
-             https://github.com/owner/repo/pull/2\n\
-             https://github.com/owner/repo/pull/3\n"
+            "* https://github.com/owner/repo/pull/1 <-- (current PR)\n\
+             * https://github.com/owner/repo/pull/2\n\
+             * https://github.com/owner/repo/pull/3\n"
         );
     }
 
@@ -375,8 +408,8 @@ Reviewer:    a, b, c"#,
                 "different-owner",
                 "different-repo"
             ),
-            "https://github.com/different-owner/different-repo/pull/10 <-- (current PR)\n\
-             https://github.com/different-owner/different-repo/pull/20\n"
+            "* https://github.com/different-owner/different-repo/pull/10 <-- (current PR)\n\
+             * https://github.com/different-owner/different-repo/pull/20\n"
         );
     }
 }
