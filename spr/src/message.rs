@@ -136,6 +136,11 @@ pub fn build_message(
     for section in sections {
         let value = section_texts.get(section);
         if let Some(text) = value {
+            // Section text is trimmed when a commit message is parsed, so
+            // trim here too; otherwise a body written from in-memory text
+            // (e.g. a freshly built PR stack) differs from the body rebuilt
+            // from the committed message and `land` refuses to proceed.
+            let text = text.trim();
             if !result.is_empty() {
                 result.push('\n');
             }
@@ -151,8 +156,13 @@ pub fn build_message(
             if display_label {
                 let label = message_section_label(section);
                 result.push_str(label);
+                // A PR stack is a markdown bullet list and must start on
+                // its own line.
                 result.push_str(
-                    if label.len() + text.len() > 76 || text.contains('\n') {
+                    if section == &MessageSection::PRStack
+                        || label.len() + text.len() > 76
+                        || text.contains('\n')
+                    {
                         ":\n"
                     } else {
                         ": "
@@ -410,6 +420,27 @@ Reviewer:    a, b, c"#,
             ),
             "* https://github.com/different-owner/different-repo/pull/10 <-- (current PR)\n\
              * https://github.com/different-owner/different-repo/pull/20\n"
+        );
+    }
+
+    #[test]
+    fn test_github_body_is_stable_across_commit_message_round_trip() {
+        let mut sections = MessageSectionsMap::new();
+        sections.insert(MessageSection::Title, "Title".to_string());
+        sections.insert(MessageSection::Summary, "Summary text.".to_string());
+        sections.insert(
+            MessageSection::PRStack,
+            build_pr_stack_message(&vec![42], "owner", "repo"),
+        );
+        let body_from_memory = build_github_body(&sections);
+        let reparsed = parse_message(
+            &build_commit_message(&sections),
+            MessageSection::Title,
+        );
+        assert_eq!(body_from_memory, build_github_body(&reparsed));
+        assert_eq!(
+            body_from_memory,
+            "Summary text.\n\nPR Stack:\n* https://github.com/owner/repo/pull/42 <-- (current PR)\n"
         );
     }
 }
