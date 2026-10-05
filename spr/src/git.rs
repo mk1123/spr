@@ -146,7 +146,8 @@ impl Git {
         let commit = repo.find_commit(prepared_commit.oid)?;
         let message = build_commit_message(&prepared_commit.message);
 
-        if Some(&message[..]) == commit.message() {
+        let parent = parent_oid.unwrap_or(prepared_commit.parent_oid);
+        if Some(&message[..]) == commit.message() && commit.parent_id(0)? == parent {
             return Ok(prepared_commit.oid);
         }
 
@@ -156,9 +157,7 @@ impl Git {
             &commit.committer(),
             &message[..],
             &commit.tree()?,
-            &[&repo.find_commit(
-                parent_oid.unwrap_or(prepared_commit.parent_oid),
-            )?],
+            &[&repo.find_commit(parent)?],
         )?;
 
         hooks.run_post_rewrite_rebase(&repo, &[(prepared_commit.oid, new_oid)]);
@@ -564,5 +563,54 @@ impl Git {
                 "There are uncommitted changes. Stash or amend them first",
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Git, PreparedCommit};
+    use crate::message::{MessageSection, MessageSectionsMap};
+
+    fn commit(repo: &git2::Repository, parent: Option<git2::Oid>, file: &str, message: &str) -> git2::Oid {
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        let mut index = repo.index().unwrap();
+        std::fs::write(repo.workdir().unwrap().join(file), file).unwrap();
+        index.add_path(std::path::Path::new(file)).unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let parents: Vec<git2::Commit> = parent.map(|p| repo.find_commit(p).unwrap()).into_iter().collect();
+        let refs: Vec<&git2::Commit> = parents.iter().collect();
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &refs).unwrap()
+    }
+
+    fn prepared(oid: git2::Oid, parent: git2::Oid, title: &str) -> PreparedCommit {
+        let mut message = MessageSectionsMap::new();
+        message.insert(MessageSection::Title, title.to_string());
+        PreparedCommit { oid, short_id: String::new(), parent_oid: parent, pr_stack: None, message, pull_request_number: None }
+    }
+
+    // A stack rewrite that changes the first commit's message must carry every
+    // later commit onto the new parent, even when a later message is unchanged;
+    // otherwise HEAD ends at the rewritten first commit and the rest are dropped.
+    #[test]
+    fn child_with_unchanged_message_moves_onto_rewritten_parent() {
+        let dir = std::env::temp_dir().join(format!("nspr-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = git2::Repository::init(&dir).unwrap();
+        let base = commit(&repo, None, "base", "base\n");
+        let r1 = commit(&repo, Some(base), "one", "R1\n");
+        let r2 = commit(&repo, Some(r1), "two", "R2\n");
+        let git = Git::new(repo);
+
+        let mut first = prepared(r1, base, "R1 renamed");
+        let new_r1 = git.rewrite_single_commit_message(&mut first, None).unwrap();
+        let mut second = prepared(r2, r1, "R2");
+        let new_r2 = git.rewrite_single_commit_message(&mut second, Some(new_r1)).unwrap();
+
+        let repo = git.repo();
+        assert_ne!(new_r2, r2);
+        assert_eq!(repo.find_commit(new_r2).unwrap().parent_id(0).unwrap(), new_r1);
+        assert_eq!(repo.head().unwrap().target().unwrap(), new_r2);
+        drop(repo);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

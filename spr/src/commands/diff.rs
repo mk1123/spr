@@ -97,6 +97,13 @@ pub async fn diff(
                 ))
             })?;
 
+        if commit_index > 0 {
+            refuse_if_parent_merged(
+                gh,
+                prepared_commits[commit_index - 1].pull_request_number,
+            )
+            .await?;
+        }
         let mut prepared_commit = prepared_commits[commit_index].clone();
         let pull_request_task = prepared_commit
             .pull_request_number
@@ -146,12 +153,27 @@ pub async fn diff(
         .collect();
 
     let mut parent_oid = None;
+    let mut parent_pull_request: Option<u64> = None;
     for (prepared_commit, pull_request_task) in
         zip(prepared_commits.iter_mut(), pull_request_tasks.into_iter())
     {
+        // After an error, stop updating Pull Requests but keep carrying the
+        // remaining commits onto their rewritten parents, so the local branch
+        // still holds the whole stack.
         if result.is_err() {
-            break;
+            parent_oid = Some(
+                git.rewrite_single_commit_message(prepared_commit, parent_oid)?,
+            );
+            continue;
         }
+        if let Err(error) = refuse_if_parent_merged(gh, parent_pull_request).await {
+            result = Err(error);
+            parent_oid = Some(
+                git.rewrite_single_commit_message(prepared_commit, parent_oid)?,
+            );
+            continue;
+        }
+        parent_pull_request = prepared_commit.pull_request_number;
 
         let pull_request = if let Some(task) = pull_request_task {
             Some(task.await??)
@@ -189,6 +211,54 @@ pub async fn diff(
     result
 }
 
+/// Refuse to push a stacked commit whose parent Pull Request already merged.
+/// Its base would be a stale synthetic branch, which yields a duplicate PR or a
+/// merge into `spr/...` instead of `main`.
+async fn refuse_if_parent_merged(
+    gh: &crate::github::GitHub,
+    parent_pull_request: Option<u64>,
+) -> Result<()> {
+    let Some(number) = parent_pull_request else {
+        return Ok(());
+    };
+    let parent = gh.clone().get_pull_request(number).await?;
+    if parent.state == crate::github::PullRequestState::Closed
+        && parent.merge_commit.is_some()
+    {
+        return Err(Error::new(format!(
+            "Parent Pull Request #{number} has merged. Rebase the remaining commits onto \
+             origin/main (drop the merged commit) and push again; this commit was not pushed."
+        )));
+    }
+    Ok(())
+}
+
+/// The PR body without blocks that bots insert between matching
+/// `<!-- NAME-begin -->` and `<!-- NAME-end -->` markers (the Devin review
+/// badge), trimmed. A begin marker without its end marker is kept.
+fn strip_bot_blocks(body: &str) -> String {
+    let mut out = body.to_string();
+    let mut search_from = 0;
+    while let Some(start) = out[search_from..].find("<!-- ").map(|i| i + search_from) {
+        let Some(close) = out[start..].find(" -->").map(|i| i + start) else {
+            break;
+        };
+        let marker = &out[start + 5..close];
+        let Some(name) = marker.strip_suffix("-begin") else {
+            search_from = close;
+            continue;
+        };
+        let end_marker = format!("<!-- {name}-end -->");
+        let Some(end) = out[close..].find(&end_marker).map(|i| i + close) else {
+            search_from = close;
+            continue;
+        };
+        out.replace_range(start..end + end_marker.len(), "");
+        search_from = start;
+    }
+    out.trim().to_string()
+}
+
 async fn verify_pr_sync(
     gh: &crate::github::GitHub,
     local_commit_short_id: &str,
@@ -202,7 +272,8 @@ async fn verify_pr_sync(
     let expected_body = build_github_body(message);
 
     if &pull_request.title != expected_title
-        || pull_request.body.as_deref() != Some(expected_body.as_str())
+        || strip_bot_blocks(pull_request.body.as_deref().unwrap_or(""))
+            != expected_body.trim()
     {
         return Err(Error::new(format!(
             "Pull Request #{pull_request_number} metadata does not match local commit {}",
@@ -827,7 +898,32 @@ fn synthetic_update_message(
 mod tests {
     use crate::github::PullRequestUpdate;
 
-    use super::{synthetic_update_message, update_pull_request_base};
+    use super::{strip_bot_blocks, synthetic_update_message, update_pull_request_base};
+
+    const BODY: &str = "## Why\n\nReason.\n\nPR Stack:\n* #1 <-- (current PR)";
+    const BADGE: &str = "<!-- devin-review-badge-begin -->\n<a href=\"https://app.devin.ai/review/x\"><img src=\"b.svg\"></a>\n<!-- devin-review-badge-end -->";
+
+    #[test]
+    fn strips_a_bot_badge_appended_to_the_body() {
+        assert_eq!(strip_bot_blocks(&format!("{BODY}\n\n{BADGE}\n")), BODY);
+    }
+
+    #[test]
+    fn strips_a_bot_badge_inserted_before_the_body() {
+        assert_eq!(strip_bot_blocks(&format!("{BADGE}\n\n{BODY}")), BODY);
+    }
+
+    #[test]
+    fn keeps_a_begin_marker_without_its_end_marker() {
+        let body = format!("{BODY}\n<!-- devin-review-badge-begin -->\nleftover");
+        assert_eq!(strip_bot_blocks(&body), body);
+    }
+
+    #[test]
+    fn a_real_body_difference_still_differs_after_stripping() {
+        let edited = format!("{BODY}\nEdited by hand.\n\n{BADGE}");
+        assert_ne!(strip_bot_blocks(&edited), BODY);
+    }
 
     #[test]
     fn omits_unchanged_main_base() {
