@@ -735,49 +735,53 @@ async fn diff_impl(
         );
         pull_request_updates.update_message(&pull_request, message);
 
-        if let Some(base_branch) = base_branch {
-            // We are using a base branch.
-
-            if let Some(base_branch_commit) = pr_base_parent {
-                // ...and we prepared a new commit for it, so we need to push an
-                // update of the base branch.
-                cmd.arg(format!(
+        // The base moves first, and the head is pushed only after GitHub has
+        // recorded the new base: see `GitHub::wait_for_pull_request_base`.
+        let desired_base = base_branch
+            .as_ref()
+            .unwrap_or(&config.master_ref)
+            .branch_name();
+        let mut base_moved = false;
+        if let (Some(base_branch), Some(base_branch_commit)) =
+            (&base_branch, pr_base_parent)
+        {
+            let mut base_push = tokio::process::Command::new("git");
+            base_push
+                .arg("push")
+                .arg("--no-verify")
+                .arg("--")
+                .arg(&config.remote_name)
+                .arg(format!(
                     "{}:{}",
                     base_branch_commit,
                     base_branch.on_github()
                 ));
-            }
-
-            // Push the new commit onto the Pull Request branch (and also the
-            // new base commit, if we added that to cmd above).
-            run_command(&mut cmd)
+            run_command(&mut base_push)
                 .await
-                .reword("git push failed".to_string())?;
-
-            update_pull_request_base(
-                &mut pull_request_updates,
-                pull_request.base.branch_name(),
-                base_branch.branch_name(),
-            );
-        } else {
-            // The Pull Request is against the master branch. In that case we
-            // only need to push the update to the Pull Request branch.
-            run_command(&mut cmd)
-                .await
-                .reword("git push failed".to_string())?;
-
-            update_pull_request_base(
-                &mut pull_request_updates,
-                pull_request.base.branch_name(),
-                config.master_ref.branch_name(),
-            );
+                .reword("git push of the base branch failed".to_string())?;
+            base_moved = true;
         }
+        update_pull_request_base(
+            &mut pull_request_updates,
+            pull_request.base.branch_name(),
+            desired_base,
+        );
+        base_moved |= pull_request_updates.base.is_some();
 
         if !pull_request_updates.is_empty() {
             gh.update_pull_request(pull_request.number, &pull_request_updates)
                 .await?;
             output("✍", "Updated PR title and description from local commit")?;
         }
+        if base_moved {
+            gh.wait_for_pull_request_base(pull_request.number, desired_base)
+                .await?;
+        }
+
+        run_command(&mut cmd)
+            .await
+            .reword("git push failed".to_string())?;
+
         verify_pr_sync(
             gh,
             &local_commit_short_id,

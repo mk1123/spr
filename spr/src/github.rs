@@ -17,6 +17,8 @@ use crate::{
 };
 use std::collections::{HashMap, HashSet};
 
+const BASE_WAIT_ATTEMPTS: u32 = 60;
+
 #[derive(Clone)]
 pub struct GitHub {
     config: crate::config::Config,
@@ -363,6 +365,60 @@ impl GitHub {
             .await?;
 
         Ok(())
+    }
+
+    /// Wait until GitHub records `branch`, at its current tip, as the base of
+    /// Pull Request `number`.
+    ///
+    /// GitHub sends a second `synchronize` event for a new head when it
+    /// processes a base change of the same Pull Request at the same time, so
+    /// every `pull_request` workflow runs twice. Pushing the head only after
+    /// this returns gives one `synchronize` event.
+    pub async fn wait_for_pull_request_base(
+        &self,
+        number: u64,
+        branch: &str,
+    ) -> Result<()> {
+        #[derive(Deserialize)]
+        struct Base {
+            #[serde(rename = "ref")]
+            name: String,
+            sha: String,
+        }
+        #[derive(Deserialize)]
+        struct Pull {
+            base: Base,
+        }
+        #[derive(Deserialize)]
+        struct RefObject {
+            sha: String,
+        }
+        #[derive(Deserialize)]
+        struct Ref {
+            object: RefObject,
+        }
+
+        let (owner, repo) = (&self.config.owner, &self.config.repo);
+        for _ in 0..BASE_WAIT_ATTEMPTS {
+            let pull: Pull = octocrab::instance()
+                .get(format!("repos/{owner}/{repo}/pulls/{number}"), None::<&()>)
+                .await?;
+            let tip: Ref = octocrab::instance()
+                .get(
+                    format!("repos/{owner}/{repo}/git/ref/heads/{branch}"),
+                    None::<&()>,
+                )
+                .await?;
+            if pull.base.name == branch && pull.base.sha == tip.object.sha {
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        Err(Error::new(format!(
+            "GitHub did not record {branch} as the base of Pull Request \
+             #{number} within {BASE_WAIT_ATTEMPTS} seconds; the head was not \
+             pushed. Run the command again."
+        )))
     }
 
     pub async fn request_reviewers(
